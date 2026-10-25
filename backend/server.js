@@ -155,37 +155,6 @@ async function pdfToText(buffer) {
     }
     return (await (mod.default || mod)(buffer)).text; // pdf-parse v1
 }
-
-const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
-const hashtagsOf = (s) => Array.from(new Set((s || '').match(/#[\p{L}\p{N}_]+/gu) || []));
-
-// Text after a label (e.g. "Caption:") up to the next "Hashtags" label, with hashtags stripped.
-function fieldText(section, labelRe) {
-    const m = section.match(labelRe);
-    let body = m ? section.slice(m.index + m[0].length) : section.replace(/^[^\n]*\n?/, '');
-    body = body.split(/hashtags?\s*:?/i)[0];
-    return clean(body.replace(/#[\p{L}\p{N}_]+/gu, ''));
-}
-
-// Each "response" in the PDF contains an Instagram Reels block followed by a Facebook Reels block.
-function extractResponses(text) {
-    const igRe = /instagram\s+reels?/gi;
-    const starts = [];
-    let m;
-    while ((m = igRe.exec(text))) starts.push(m.index);
-    return starts.map((start, i) => {
-        const block = text.slice(start, starts[i + 1] ?? text.length);
-        const fbIdx = block.search(/facebook\s+reels?/i);
-        const igPart = fbIdx >= 0 ? block.slice(0, fbIdx) : block;
-        const fbPart = fbIdx >= 0 ? block.slice(fbIdx) : '';
-        return {
-            index: i + 1,
-            instagram: { caption: fieldText(igPart, /caption\s*:?/i), hashtags: hashtagsOf(igPart) },
-            facebook: { description: fieldText(fbPart, /description\s*:?/i), hashtags: hashtagsOf(fbPart) },
-        };
-    });
-}
-
 async function listDriveVideos(folderId) {
     assertGoogleConfigured();
     const files = [];
