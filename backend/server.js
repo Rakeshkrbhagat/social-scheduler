@@ -350,7 +350,7 @@ app.post('/api/schedule', async (req, res) => {
             r.facebook = { success: true, id };
         } catch (e) { r.facebook = { success: false, message: graphErr(e) }; }
         try {
-            const id = await uploadInstagramReel({ videoUrl, publishTime, caption: withTags(item.instagram.caption, item.instagram.hashtags) });
+            const id = await uploadInstagramReel({ videoUrl, publishTime, caption: instagramFinalText(item.instagram) });
             r.instagram = { success: true, id };
         } catch (e) { r.instagram = { success: false, message: graphErr(e) }; }
         results.push(r);
