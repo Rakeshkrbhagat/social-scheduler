@@ -123,6 +123,105 @@ app.post('/api/upload-pdf', upload.single('conversationFile'), (req, res) => {
     res.json({ message: 'File uploaded and parsing started' });
 });
 
+// ---------- [DASH-2] Content extraction & mapping ----------
+async function pdfToText(buffer) {
+    const mod = require('pdf-parse');
+    if (mod.PDFParse) { // pdf-parse v2
+        const parser = new mod.PDFParse({ data: buffer });
+        try { return (await parser.getText()).text; } finally { await parser.destroy?.(); }
+    }
+    return (await (mod.default || mod)(buffer)).text; // pdf-parse v1
+}
+
+const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+const hashtagsOf = (s) => Array.from(new Set((s || '').match(/#[\p{L}\p{N}_]+/gu) || []));
+
+// Text after a label (e.g. "Caption:") up to the next "Hashtags" label, with hashtags stripped.
+function fieldText(section, labelRe) {
+    const m = section.match(labelRe);
+    let body = m ? section.slice(m.index + m[0].length) : section.replace(/^[^\n]*\n?/, '');
+    body = body.split(/hashtags?\s*:?/i)[0];
+    return clean(body.replace(/#[\p{L}\p{N}_]+/gu, ''));
+}
+
+// Each "response" in the PDF contains an Instagram Reels block followed by a Facebook Reels block.
+function extractResponses(text) {
+    const igRe = /instagram\s+reels?/gi;
+    const starts = [];
+    let m;
+    while ((m = igRe.exec(text))) starts.push(m.index);
+    return starts.map((start, i) => {
+        const block = text.slice(start, starts[i + 1] ?? text.length);
+        const fbIdx = block.search(/facebook\s+reels?/i);
+        const igPart = fbIdx >= 0 ? block.slice(0, fbIdx) : block;
+        const fbPart = fbIdx >= 0 ? block.slice(fbIdx) : '';
+        return {
+            index: i + 1,
+            instagram: { caption: fieldText(igPart, /caption\s*:?/i), hashtags: hashtagsOf(igPart) },
+            facebook: { description: fieldText(fbPart, /description\s*:?/i), hashtags: hashtagsOf(fbPart) },
+        };
+    });
+}
+
+async function listDriveVideos(folderId) {
+    if (!process.env.GOOGLE_API_KEY) throw new Error('GOOGLE_API_KEY is not configured on the server.');
+    const drive = google.drive({ version: 'v3', auth: process.env.GOOGLE_API_KEY });
+    const files = [];
+    let pageToken;
+    do {
+        const { data } = await drive.files.list({
+            q: `'${folderId}' in parents and mimeType contains 'video/' and trashed = false`,
+            fields: 'nextPageToken, files(id,name,mimeType,webViewLink,thumbnailLink)',
+            pageSize: 1000,
+            pageToken,
+        });
+        files.push(...(data.files || []));
+        pageToken = data.nextPageToken;
+    } while (pageToken);
+    return files;
+}
+
+// Number at the end of the file name (without extension): "R-YT-12.mp4" -> 12
+const videoNumber = (name) => {
+    const m = path.parse(name).name.match(/(\d+)\s*$/);
+    return m ? parseInt(m[1], 10) : null;
+};
+
+app.post('/api/process', upload.single('conversationFile'), async (req, res) => {
+    const file = req.file;
+    try {
+        if (!session.googleDrive.connected) throw new Error('Connect Google Drive first.');
+        if (!file) throw new Error('Please upload the Conversation PDF.');
+        session.uploadedFiles.push(file.path);
+        if (file.mimetype !== 'application/pdf' && !/\.pdf$/i.test(file.originalname)) {
+            throw new Error('Uploaded file must be a PDF.');
+        }
+
+        const [videos, text] = await Promise.all([
+            listDriveVideos(session.googleDrive.folderId),
+            fs.promises.readFile(file.path).then(pdfToText),
+        ]);
+        const responses = extractResponses(text);
+        if (!responses.length) throw new Error('No "Instagram Reels" content found in the PDF.');
+
+        const byNumber = new Map(responses.map((r) => [r.index, r]));
+        const items = videos
+            .map((v) => ({ video: v, number: videoNumber(v.name) }))
+            .sort((a, b) => (a.number ?? Infinity) - (b.number ?? Infinity))
+            .map(({ video, number }) => ({
+                number,
+                video: { id: video.id, name: video.name, link: video.webViewLink },
+                instagram: byNumber.get(number)?.instagram || null,
+                facebook: byNumber.get(number)?.facebook || null,
+            }));
+
+        session.config.mappings = items;
+        res.json({ success: true, message: `Found ${videos.length} video(s) and ${responses.length} response(s).`, items });
+    } catch (err) {
+        res.status(400).json({ success: false, message: err.message });
+    }
+});
+
 app.post('/api/schedule', (req, res) => {
     res.json({ message: 'Scheduling started' });
 });

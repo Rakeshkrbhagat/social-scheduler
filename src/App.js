@@ -69,8 +69,38 @@ function App() {
       setStep('done');
     }, 'instagramFail');
 
+  // [DASH-1] / [DASH-2]
+  const [pdf, setPdf] = useState(null);
+  const [fileKey, setFileKey] = useState(0);
+  const [processing, setProcessing] = useState(false);
+  const [procError, setProcError] = useState('');
+  const [items, setItems] = useState([]);
+  const authenticated = status.google && status.facebook && status.instagram;
+
+  const getVideosAndCaptions = async () => {
+    setProcessing(true);
+    setProcError('');
+    setItems([]);
+    try {
+      const fd = new FormData();
+      fd.append('conversationFile', pdf);
+      const res = await fetch(`${API}/api/process`, { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) throw new Error(data.message || res.statusText);
+      setItems(data.items || []);
+    } catch (e) {
+      setProcError(e.message);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   const logout = async () => {
     await post('/api/logout');
+    setPdf(null);
+    setFileKey((k) => k + 1);
+    setItems([]);
+    setProcError('');
     setStatus(initialStatus);
     setFolderUrl('');
     setFb({ pageId: '', accessToken: '' });

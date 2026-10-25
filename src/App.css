@@ -10,4 +10,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .dialog label { display: block; margin-bottom: 12px; font-size: 14px; }
 .dialog input { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; padding: 8px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.upload-row { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+.upload-row label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.error { color: #c0392b; }
+.results { width: 100%; border-collapse: collapse; margin-top: 24px; }
+.results th, .results td { border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
+.results th { background: #f4f4f4; }
+.results small { color: #2a6db0; }
 
