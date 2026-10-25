@@ -311,9 +311,16 @@ app.post('/api/schedule', async (req, res) => {
     const results = [];
     for (const item of items) { // strictly one video at a time: Facebook, then Instagram
         const r = { videoId: item.video.id, name: item.video.name, facebook: null, instagram: null };
-        const videoUrl = driveDownloadUrl(item.video.id);
         if (!item.facebook || !item.instagram) {
             r.error = 'No matching PDF response for this video; skipped.';
+            results.push(r);
+            continue;
+        }
+        let videoUrl;
+        try {
+            videoUrl = await driveDownloadUrl(item.video.id);
+        } catch (e) {
+            r.error = `Google auth failed: ${googleErr(e)}`;
             results.push(r);
             continue;
         }
