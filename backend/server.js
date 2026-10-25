@@ -1,3 +1,4 @@
+const { extractResponses, instagramFinalText, facebookFinalText } = require('./parser');
 const express = require('express');
 
 
@@ -300,7 +301,7 @@ async function uploadInstagramReel({ videoUrl, caption, publishTime }) {
     const publish = () => axios.post(`${GRAPH}/${accountId}/media_publish`, null, {
         params: { creation_id: creationId, access_token: accessToken },
     }).catch((e) => console.error(`Instagram publish failed (${creationId}): ${graphErr(e)}`));
-    const delay = publishTime * 1000 - Date.now();
+    const delay = (publishTime * 1000) - Date.now();
     if (delay <= 0) await publish();
     else {
         const t = setTimeout(() => { igTimers.delete(t); publish(); }, delay);
@@ -322,7 +323,7 @@ app.post('/api/schedule', async (req, res) => {
         if (!Array.isArray(items) || !items.length) throw new Error('No videos to schedule.');
         if (Number.isNaN(publishTime)) throw new Error('Invalid date/time.');
         const now = Date.now() / 1000;
-        if (publishTime < now + 10 * 60 || publishTime > now + 29 * 24 * 3600) {
+        if (publishTime < now + (10 * 60) || publishTime > now + (29 * 24 * 3600)) {
             throw new Error('Scheduled time must be between 10 minutes and 29 days from now.');
         }
     } catch (err) {
@@ -346,7 +347,7 @@ app.post('/api/schedule', async (req, res) => {
             continue;
         }
         try {
-            const id = await uploadFacebookReel({ videoUrl, publishTime, description: withTags(item.facebook.description, item.facebook.hashtags) });
+            const id = await uploadFacebookReel({ videoUrl, publishTime, description: facebookFinalText(item.facebook) });
             r.facebook = { success: true, id };
         } catch (e) { r.facebook = { success: false, message: graphErr(e) }; }
         try {
