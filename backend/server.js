@@ -82,8 +82,8 @@ app.post('/api/auth/instagram', async (req, res) => {
     if (!session.facebook.connected) {
         return res.status(400).json({ success: false, message: 'Connect Facebook first.' });
     }
-    const { accountId, accessToken } = req.body || {};
-    const token = accessToken || session.facebook.accessToken;
+    const accountId = req.body?.accountId || process.env.INSTAGRAM_ACCOUNT_ID;
+    const token = req.body?.accessToken || process.env.PAGE_ACCESS_TOKEN || session.facebook.accessToken;
     if (!accountId) {
         return res.status(400).json({ success: false, message: 'Instagram Business Account ID is required.' });
     }
