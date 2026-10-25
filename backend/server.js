@@ -29,6 +29,28 @@ let session = initialSession();
 
 const GRAPH = 'https://graph.facebook.com/v19.0';
 
+// ---------- Google OAuth2 (GOOGLE_API_KEY cannot read private Drive folders) ----------
+const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET
+);
+
+oauth2Client.setCredentials({
+    refresh_token: process.env.GOOGLE_REFRESH_TOKEN
+});
+
+// Pass the oauth2Client instead of the API key
+const drive = google.drive({
+    version: 'v3',
+    auth: oauth2Client
+});
+
+const assertGoogleConfigured = () => {
+    const missing = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REFRESH_TOKEN'].filter((k) => !process.env[k]);
+    if (missing.length) throw new Error(`Google OAuth is not configured. Missing: ${missing.join(', ')}`);
+};
+const googleErr = (err) => err.response?.data?.error?.message || err.response?.data?.error_description || err.message;
+
 function extractFolderId(url) {
     if (typeof url !== 'string') return null;
     const m = url.match(/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/([a-zA-Z0-9_-]+)/)
@@ -44,17 +66,15 @@ app.post('/api/auth/google', async (req, res) => {
         return res.status(400).json({ success: false, message: 'Invalid Google Drive folder URL.' });
     }
     try {
-        if (process.env.GOOGLE_API_KEY) {
-            const drive = google.drive({ version: 'v3', auth: process.env.GOOGLE_API_KEY });
-            const { data } = await drive.files.get({ fileId: folderId, fields: 'id,name,mimeType' });
-            if (data.mimeType !== 'application/vnd.google-apps.folder') {
-                throw new Error('The URL does not point to a folder.');
-            }
+        assertGoogleConfigured();
+        const { data } = await drive.files.get({ fileId: folderId, fields: 'id,name,mimeType', supportsAllDrives: true });
+        if (data.mimeType !== 'application/vnd.google-apps.folder') {
+            throw new Error('The URL does not point to a folder.');
         }
         session.googleDrive = { connected: true, folderId, folderUrl };
         res.json({ success: true, message: 'Google Drive connected', folderId });
     } catch (err) {
-        res.status(400).json({ success: false, message: `Could not access folder: ${err.message}` });
+        res.status(400).json({ success: false, message: `Could not access folder: ${googleErr(err)}` });
     }
 });
 
@@ -166,8 +186,7 @@ function extractResponses(text) {
 }
 
 async function listDriveVideos(folderId) {
-    if (!process.env.GOOGLE_API_KEY) throw new Error('GOOGLE_API_KEY is not configured on the server.');
-    const drive = google.drive({ version: 'v3', auth: process.env.GOOGLE_API_KEY });
+    assertGoogleConfigured();
     const files = [];
     let pageToken;
     do {
@@ -175,6 +194,8 @@ async function listDriveVideos(folderId) {
             q: `'${folderId}' in parents and mimeType contains 'video/' and trashed = false`,
             fields: 'nextPageToken, files(id,name,mimeType,webViewLink,thumbnailLink)',
             pageSize: 1000,
+            supportsAllDrives: true,
+            includeItemsFromAllDrives: true,
             pageToken,
         });
         files.push(...(data.files || []));
@@ -230,9 +251,11 @@ const graphErr = (err) => err.response?.data?.error?.message || err.message;
 const tagsText = (t) => (Array.isArray(t) ? t : String(t || '').split(/\s+/)).filter(Boolean).join(' ');
 const withTags = (text, tags) => [text, tagsText(tags)].filter(Boolean).join('\n\n');
 
-// Direct-download URL for a (publicly shared) Drive file, fetchable by Meta's servers.
-const driveDownloadUrl = (fileId) =>
-    `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${process.env.GOOGLE_API_KEY}`;
+// Direct-download URL for a Drive file, fetchable by Meta's servers (fresh OAuth access token).
+async function driveDownloadUrl(fileId) {
+    const { token } = await oauth2Client.getAccessToken(); // auto-refreshed via refresh token
+    return `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true&access_token=${encodeURIComponent(token)}`;
+}
 
 const igTimers = new Set(); // pending Instagram publish timers (cleared on logout)
 
@@ -296,7 +319,7 @@ app.post('/api/schedule', async (req, res) => {
         : Math.floor(new Date(`${date}T${time}`).getTime() / 1000);
     try {
         if (!session.facebook.connected || !session.instagram.connected) throw new Error('Connect Facebook and Instagram first.');
-        if (!process.env.GOOGLE_API_KEY) throw new Error('GOOGLE_API_KEY is not configured on the server.');
+        assertGoogleConfigured();
         if (!date || !time) throw new Error('Date and time are required.');
         if (!Array.isArray(items) || !items.length) throw new Error('No videos to schedule.');
         if (Number.isNaN(publishTime)) throw new Error('Invalid date/time.');
