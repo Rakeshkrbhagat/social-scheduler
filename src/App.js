@@ -87,11 +87,12 @@ function App() {
       const res = await fetch(`${API}/api/process`, { method: 'POST', body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.success === false) throw new Error(data.message || res.statusText);
-      // hashtags become editable space-separated strings
+      // hashtags are editable space-separated strings (from the AI JSON)
+      const tagStr = (t) => (Array.isArray(t) ? t.join(' ') : String(t ?? ''));
       setItems((data.items || []).map((it) => ({
         ...it,
-        instagram: it.instagram && { ...it.instagram, hashtags: it.instagram.hashtags.join(' ') },
-        facebook: it.facebook && { ...it.facebook, hashtags: it.facebook.hashtags.join(' ') },
+        instagram: it.instagram && { ...it.instagram, hashtags: tagStr(it.instagram.hashtags) },
+        facebook: it.facebook && { ...it.facebook, hashtags: tagStr(it.facebook.hashtags) },
       })));
       setResults({});
     } catch (e) {

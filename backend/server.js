@@ -225,7 +225,7 @@ app.post('/api/process', upload.single('conversationFile'), async (req, res) => 
             fs.promises.readFile(file.path).then(pdfToText),
         ]);
         const responses = extractResponses(text);
-        if (!responses.length) throw new Error('No "Instagram Reels" content found in the PDF.');
+        if (!responses.length) throw new Error('No valid JSON AI responses ({ "instagram": {...}, "facebook": {...} }) found in the PDF.');
 
         const byNumber = new Map(responses.map((r) => [r.index, r]));
         const items = videos
@@ -248,8 +248,6 @@ app.post('/api/process', upload.single('conversationFile'), async (req, res) => 
 // ---------- [SCHED-3] Sequential publishing ----------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const graphErr = (err) => err.response?.data?.error?.message || err.message;
-const tagsText = (t) => (Array.isArray(t) ? t : String(t || '').split(/\s+/)).filter(Boolean).join(' ');
-const withTags = (text, tags) => [text, tagsText(tags)].filter(Boolean).join('\n\n');
 
 // Direct-download URL for a Drive file, fetchable by Meta's servers (fresh OAuth access token).
 async function driveDownloadUrl(fileId) {
