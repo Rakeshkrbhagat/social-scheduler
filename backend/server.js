@@ -111,6 +111,8 @@ app.post('/api/logout', async (req, res) => {
     try {
         const entries = await fs.promises.readdir(UPLOAD_DIR);
         await Promise.all(entries.map((f) => fs.promises.rm(path.join(UPLOAD_DIR, f), { recursive: true, force: true })));
+        igTimers.forEach(clearTimeout);
+        igTimers.clear();
         session = initialSession();
         res.json({ success: true, message: 'Logged out and all data cleared.' });
     } catch (err) {
@@ -222,8 +224,119 @@ app.post('/api/process', upload.single('conversationFile'), async (req, res) => 
     }
 });
 
-app.post('/api/schedule', (req, res) => {
-    res.json({ message: 'Scheduling started' });
+// ---------- [SCHED-3] Sequential publishing ----------
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const graphErr = (err) => err.response?.data?.error?.message || err.message;
+const tagsText = (t) => (Array.isArray(t) ? t : String(t || '').split(/\s+/)).filter(Boolean).join(' ');
+const withTags = (text, tags) => [text, tagsText(tags)].filter(Boolean).join('\n\n');
+
+// Direct-download URL for a (publicly shared) Drive file, fetchable by Meta's servers.
+const driveDownloadUrl = (fileId) =>
+    `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${process.env.GOOGLE_API_KEY}`;
+
+const igTimers = new Set(); // pending Instagram publish timers (cleared on logout)
+
+// Facebook Reels: start -> hosted upload -> finish (natively scheduled)
+async function uploadFacebookReel({ videoUrl, description, publishTime }) {
+    const { pageId, accessToken } = session.facebook;
+    const { data: start } = await axios.post(`${GRAPH}/${pageId}/video_reels`, null, {
+        params: { upload_phase: 'start', access_token: accessToken },
+    });
+    await axios.post(start.upload_url || `https://rupload.facebook.com/video-upload/v19.0/${start.video_id}`, null, {
+        headers: { Authorization: `OAuth ${accessToken}`, file_url: videoUrl },
+    });
+    const { data: finish } = await axios.post(`${GRAPH}/${pageId}/video_reels`, null, {
+        params: {
+            upload_phase: 'finish',
+            video_id: start.video_id,
+            video_state: 'SCHEDULED',
+            scheduled_publish_time: publishTime,
+            description,
+            access_token: accessToken,
+        },
+    });
+    if (finish.success === false) throw new Error('Facebook did not accept the reel.');
+    return start.video_id;
+}
+
+// Instagram Reels: create container, wait until processed, publish at the scheduled time.
+// (The IG Graph API has no native scheduling, so the publish step is deferred server-side.)
+async function uploadInstagramReel({ videoUrl, caption, publishTime }) {
+    const { accountId, accessToken } = session.instagram;
+    const { data } = await axios.post(`${GRAPH}/${accountId}/media`, null, {
+        params: { media_type: 'REELS', video_url: videoUrl, caption, share_to_feed: true, access_token: accessToken },
+    });
+    const creationId = data.id;
+    for (let i = 0; i < 60; i++) { // up to ~5 minutes
+        const { data: s } = await axios.get(`${GRAPH}/${creationId}`, {
+            params: { fields: 'status_code,status', access_token: accessToken },
+        });
+        if (s.status_code === 'FINISHED') break;
+        if (s.status_code === 'ERROR' || s.status_code === 'EXPIRED') throw new Error(`Instagram processing failed: ${s.status || s.status_code}`);
+        if (i === 59) throw new Error('Instagram processing timed out.');
+        await sleep(5000);
+    }
+    const publish = () => axios.post(`${GRAPH}/${accountId}/media_publish`, null, {
+        params: { creation_id: creationId, access_token: accessToken },
+    }).catch((e) => console.error(`Instagram publish failed (${creationId}): ${graphErr(e)}`));
+    const delay = publishTime * 1000 - Date.now();
+    if (delay <= 0) await publish();
+    else {
+        const t = setTimeout(() => { igTimers.delete(t); publish(); }, delay);
+        igTimers.add(t);
+    }
+    return creationId;
+}
+
+app.post('/api/schedule', async (req, res) => {
+    const { date, time, items } = req.body || {};
+    // Prefer the client-computed epoch (user's local timezone)
+    const publishTime = Number.isInteger(req.body?.publishTime)
+        ? req.body.publishTime
+        : Math.floor(new Date(`${date}T${time}`).getTime() / 1000);
+    try {
+        if (!session.facebook.connected || !session.instagram.connected) throw new Error('Connect Facebook and Instagram first.');
+        if (!process.env.GOOGLE_API_KEY) throw new Error('GOOGLE_API_KEY is not configured on the server.');
+        if (!date || !time) throw new Error('Date and time are required.');
+        if (!Array.isArray(items) || !items.length) throw new Error('No videos to schedule.');
+        if (Number.isNaN(publishTime)) throw new Error('Invalid date/time.');
+        const now = Date.now() / 1000;
+        if (publishTime < now + 10 * 60 || publishTime > now + 29 * 24 * 3600) {
+            throw new Error('Scheduled time must be between 10 minutes and 29 days from now.');
+        }
+    } catch (err) {
+        return res.status(400).json({ success: false, message: err.message });
+    }
+
+    const results = [];
+    for (const item of items) { // strictly one video at a time: Facebook, then Instagram
+        const r = { videoId: item.video.id, name: item.video.name, facebook: null, instagram: null };
+        const videoUrl = driveDownloadUrl(item.video.id);
+        if (!item.facebook || !item.instagram) {
+            r.error = 'No matching PDF response for this video; skipped.';
+            results.push(r);
+            continue;
+        }
+        try {
+            const id = await uploadFacebookReel({ videoUrl, publishTime, description: withTags(item.facebook.description, item.facebook.hashtags) });
+            r.facebook = { success: true, id };
+        } catch (e) { r.facebook = { success: false, message: graphErr(e) }; }
+        try {
+            const id = await uploadInstagramReel({ videoUrl, publishTime, caption: withTags(item.instagram.caption, item.instagram.hashtags) });
+            r.instagram = { success: true, id };
+        } catch (e) { r.instagram = { success: false, message: graphErr(e) }; }
+        results.push(r);
+    }
+
+    const ok = results.filter((r) => r.facebook?.success && r.instagram?.success).length;
+    session.config.lastSchedule = { date, time, results };
+    res.json({
+        success: ok === results.length,
+        message: ok === results.length
+            ? `All ${ok} video(s) scheduled on Facebook and Instagram for ${date} ${time}.`
+            : `${ok} of ${results.length} video(s) fully scheduled. See details below.`,
+        results,
+    });
 });
 
 const PORT = process.env.PORT || 5000;

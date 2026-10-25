@@ -17,4 +17,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .results th, .results td { border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
 .results th { background: #f4f4f4; }
 .results small { color: #2a6db0; }
-
+.results textarea, .results input { width: 100%; box-sizing: border-box; padding: 6px; margin-bottom: 4px; font: inherit; }
+.schedule-row { display: flex; align-items: flex-end; gap: 16px; margin-top: 20px; flex-wrap: wrap; }
+.schedule-row label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.schedule-row input { padding: 7px; }

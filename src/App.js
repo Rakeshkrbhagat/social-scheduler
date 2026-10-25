@@ -87,11 +87,51 @@ function App() {
       const res = await fetch(`${API}/api/process`, { method: 'POST', body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.success === false) throw new Error(data.message || res.statusText);
-      setItems(data.items || []);
+      // hashtags become editable space-separated strings
+      setItems((data.items || []).map((it) => ({
+        ...it,
+        instagram: it.instagram && { ...it.instagram, hashtags: it.instagram.hashtags.join(' ') },
+        facebook: it.facebook && { ...it.facebook, hashtags: it.facebook.hashtags.join(' ') },
+      })));
+      setResults({});
     } catch (e) {
       setProcError(e.message);
     } finally {
       setProcessing(false);
+    }
+  };
+
+  // [SCHED-1..3]
+  const [schedDate, setSchedDate] = useState('');
+  const [schedTime, setSchedTime] = useState('');
+  const [scheduling, setScheduling] = useState(false);
+  const [results, setResults] = useState({});
+  const [schedMsg, setSchedMsg] = useState(null);
+
+  const updateItem = (i, platform, field, value) =>
+    setItems((list) => list.map((it, idx) => (idx === i ? { ...it, [platform]: { ...it[platform], [field]: value } } : it)));
+
+  const schedule = async () => {
+    setScheduling(true);
+    setResults({});
+    try {
+      const res = await fetch(`${API}/api/schedule`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: schedDate,
+          time: schedTime,
+          publishTime: Math.floor(new Date(`${schedDate}T${schedTime}`).getTime() / 1000),
+          items,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setResults(Object.fromEntries((data.results || []).map((r) => [r.videoId, r])));
+      setSchedMsg({ ok: res.ok && data.success, text: data.message || res.statusText });
+    } catch (e) {
+      setSchedMsg({ ok: false, text: `Network error: ${e.message}` });
+    } finally {
+      setScheduling(false);
     }
   };
 
@@ -101,6 +141,10 @@ function App() {
     setFileKey((k) => k + 1);
     setItems([]);
     setProcError('');
+    setResults({});
+    setSchedDate('');
+    setSchedTime('');
+    setSchedMsg(null);
     setStatus(initialStatus);
     setFolderUrl('');
     setFb({ pageId: '', accessToken: '' });
@@ -120,14 +164,85 @@ function App() {
         <button onClick={logout}>Logout</button>
       </header>
 
-      <main className="dashboard">
-        <ul className="status-list">
-          <li>Google Drive: {status.google ? '✅ Connected' : '❌ Not connected'}</li>
-          <li>Facebook: {status.facebook ? '✅ Connected' : '❌ Not connected'}</li>
-          <li>Instagram: {status.instagram ? '✅ Connected' : '❌ Not connected'}</li>
-        </ul>
-        <button onClick={() => setStep('drive')}>Connect Accounts</button>
-      </main>
+      {authenticated && step === null ? (
+        <main className="dashboard">
+          <h2>Main Dashboard</h2>
+          <div className="upload-row">
+            <label>Conversation PDF
+              <input key={fileKey} type="file" accept="application/pdf,.pdf"
+                onChange={(e) => setPdf(e.target.files[0] || null)} />
+            </label>
+            <button onClick={getVideosAndCaptions} disabled={!pdf || processing || scheduling}>
+              {processing ? 'Processing…' : 'Get Video & Captions'}
+            </button>
+          </div>
+          {procError && <p className="error">{procError}</p>}
+
+          {items.length > 0 && (
+            <>
+              <h3>Review Content</h3>
+              <table className="results">
+                <thead><tr><th>#</th><th>Video</th><th>Instagram Reel (caption / hashtags)</th><th>Facebook Reel (description / hashtags)</th><th>Status</th></tr></thead>
+                <tbody>
+                  {items.map((it, i) => {
+                    const r = results[it.video.id];
+                    return (
+                      <tr key={it.video.id}>
+                        <td>{it.number ?? '–'}</td>
+                        <td>{it.video.link ? <a href={it.video.link} target="_blank" rel="noreferrer">{it.video.name}</a> : it.video.name}</td>
+                        <td>{it.instagram ? <>
+                          <textarea rows={4} value={it.instagram.caption} disabled={scheduling}
+                            onChange={(e) => updateItem(i, 'instagram', 'caption', e.target.value)} />
+                          <input value={it.instagram.hashtags} disabled={scheduling}
+                            onChange={(e) => updateItem(i, 'instagram', 'hashtags', e.target.value)} />
+                        </> : <em>No matching response</em>}</td>
+                        <td>{it.facebook ? <>
+                          <textarea rows={4} value={it.facebook.description} disabled={scheduling}
+                            onChange={(e) => updateItem(i, 'facebook', 'description', e.target.value)} />
+                          <input value={it.facebook.hashtags} disabled={scheduling}
+                            onChange={(e) => updateItem(i, 'facebook', 'hashtags', e.target.value)} />
+                        </> : <em>No matching response</em>}</td>
+                        <td>{r ? (r.error ? <span className="error">{r.error}</span> : <>
+                          <div>FB: {r.facebook?.success ? '✅' : `❌ ${r.facebook?.message || ''}`}</div>
+                          <div>IG: {r.instagram?.success ? '✅' : `❌ ${r.instagram?.message || ''}`}</div>
+                        </>) : '—'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+
+              <div className="schedule-row">
+                <label>Date
+                  <input type="date" value={schedDate} onChange={(e) => setSchedDate(e.target.value)} disabled={scheduling} />
+                </label>
+                <label>Time
+                  <input type="time" value={schedTime} onChange={(e) => setSchedTime(e.target.value)} disabled={scheduling} />
+                </label>
+                <button onClick={schedule} disabled={!schedDate || !schedTime || scheduling}>
+                  {scheduling ? 'Scheduling…' : 'Schedule'}
+                </button>
+              </div>
+            </>
+          )}
+        </main>
+      ) : (
+        <main className="dashboard">
+          <ul className="status-list">
+            <li>Google Drive: {status.google ? '✅ Connected' : '❌ Not connected'}</li>
+            <li>Facebook: {status.facebook ? '✅ Connected' : '❌ Not connected'}</li>
+            <li>Instagram: {status.instagram ? '✅ Connected' : '❌ Not connected'}</li>
+          </ul>
+          <button onClick={() => setStep('drive')}>Connect Accounts</button>
+        </main>
+      )}
+
+      {schedMsg && (
+        <Dialog title={schedMsg.ok ? 'Scheduling Complete' : 'Scheduling Finished with Errors'}
+          actions={<button onClick={() => setSchedMsg(null)}>OK</button>}>
+          <p>{schedMsg.text}</p>
+        </Dialog>
+      )}
 
       {step === 'drive' && (
         <Dialog title="Connect Google Drive" actions={<>
