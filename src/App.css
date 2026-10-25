@@ -1,38 +1,13 @@
-.App {
-  text-align: center;
-}
+.App { font-family: system-ui, sans-serif; }
+.dashboard-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; background: #282c34; color: #fff; }
+.dashboard { padding: 24px; }
+.status-list { list-style: none; padding: 0; line-height: 2; }
+button { padding: 8px 16px; border-radius: 6px; border: 1px solid #888; cursor: pointer; background: #fff; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.dialog-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
+.dialog { background: #fff; color: #222; border-radius: 10px; padding: 24px; width: min(440px, 90vw); box-shadow: 0 10px 30px rgba(0,0,0,0.3); }
+.dialog h2 { margin-top: 0; }
+.dialog label { display: block; margin-bottom: 12px; font-size: 14px; }
+.dialog input { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; padding: 8px; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
-}
-
-.App-header {
-  background-color: #282c34;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
-  color: white;
-}
-
-.App-link {
-  color: #61dafb;
-}
-
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
