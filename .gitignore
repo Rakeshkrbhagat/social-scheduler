@@ -28,3 +28,7 @@ node_modules/
 build/
 .env
 backend/.env
+
+# env files
+.env
+backend/.env
