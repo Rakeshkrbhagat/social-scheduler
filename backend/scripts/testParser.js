@@ -1,54 +1,33 @@
-// node scripts/testParser.js  -> verifies prompt text is ignored and Response content is parsed.
+// node scripts/testParser.js
 const assert = require('assert');
 const { extractResponses, instagramFinalText, facebookFinalText } = require('../parser');
 
-const prompt = `Prompt: Create content for each video.
-2. INSTAGRAM REELS
-Caption
-Write 2-3 concise lines in Hinglish.
-Hashtags
-Add 10 relevant hashtags.
-On-Screen Text
-...
-3. FACEBOOK REELS
-Description
-Write a short description.
-Hashtags
-Add 5 hashtags.
-4. Notes
-26/10/2026, 10:15 AM
-`;
-const response1 = `Response:
-Video 1
-2. INSTAGRAM REELS
-Caption
-दिवाली में मां लक्ष्मी की पूजा कैसे करें 🪔
-10:16 AM
-Hashtags
-#Diwali #LakshmiPuja
-On-Screen Text
-शुभ दीपावली
-3. FACEBOOK REELS
-Description
-इस दिवाली मां लक्ष्मी की पूजा सही विधि से करें।
-Hashtags
-#Diwali2026 #Puja
-4. Thumbnail
-`;
-const response2 = `Response: { "instagram": { "caption": "Video 2 caption", "hashtags": "#two" },
-"facebook": { "description": "Video 2 desc", "hashtags": ["#fb2"] } }`;
+const ai = (n) => `<h2 data-path-to-node="1">Video ${n}</h2>
+<h3 data-path-to-node="10">2. INSTAGRAM REELS</h3>
+<h3 data-path-to-node="20">Caption</h3><p data-path-to-node="21">दिवाली में मां लक्ष्मी की पूजा &amp; आरती ${n} 🪔</p>
+<h3 data-path-to-node="22">Hashtags</h3><p data-path-to-node="23">#Diwali #लक्ष्मी</p>
+<h3 data-path-to-node="24">On-Screen Text</h3><p>शुभ दीपावली</p>
+<h3 data-path-to-node="30">3. FACEBOOK REELS</h3>
+<h3>Description</h3><p>इस दिवाली पूजा करें। <a href="https://x.com">https://x.com</a></p>
+<h3>Hashtags</h3><p>#Puja #FB${n}</p>
+<h3>4. Thumbnail</h3><p>ignore me</p>`;
 
-const r = extractResponses(prompt + response1 + response2);
+const data = { chat: [
+    { user: 'PROMPT: Caption - Write 2-3 concise lines. Hashtags - add 10.', ai: '<p>Okay, send the videos.</p>' },
+    { user: 'video 1', ai: ai(1) },
+    { user: 'video 2', ai: ai(2) },
+] };
+
+const r = extractResponses(data);
 assert.strictEqual(r.length, 2);
-assert.strictEqual(r[0].instagram.caption, 'दिवाली में मां लक्ष्मी की पूजा कैसे करें 🪔');
-assert.strictEqual(r[0].instagram.hashtags, '#Diwali #LakshmiPuja');
-assert.strictEqual(r[0].facebook.description, 'इस दिवाली मां लक्ष्मी की पूजा सही विधि से करें।');
-assert.strictEqual(r[0].facebook.hashtags, '#Diwali2026 #Puja');
-assert.strictEqual(r[1].facebook.hashtags, '#fb2');
-const all = JSON.stringify(r);
-assert(!/Write 2-3|Add 10|10:1\d/.test(all), 'prompt/metadata leaked');
-assert.strictEqual(instagramFinalText(r[0].instagram), 'दिवाली में मां लक्ष्मी की पूजा कैसे करें 🪔\n\n#Diwali #LakshmiPuja');
-assert.strictEqual(facebookFinalText(r[1].facebook), 'Video 2 desc\n\n#fb2');
-assert.strictEqual(instagramFinalText(null), '');
+assert.strictEqual(r[0].index, 1);
+assert.strictEqual(r[1].index, 2);
+assert.strictEqual(r[0].instagram.caption, instagramFinalText({ caption: 'दिवाली में मां लक्ष्मी की पूजा & आरती 1 🪔' }));
+assert.strictEqual(r[0].instagram.hashtags, '#Diwali #लक्ष्मी');
+assert.strictEqual(r[1].facebook.description, 'इस दिवाली पूजा करें।');
+assert.strictEqual(r[1].facebook.hashtags, '#Puja #FB2');
+assert(!/Write 2-3|ignore me|https?:/.test(JSON.stringify(r)), 'prompt/URL leaked');
+assert.strictEqual(instagramFinalText(r[0].instagram), 'दिवाली में मां लक्ष्मी की पूजा & आरती 1 🪔\n\n#Diwali #लक्ष्मी');
+assert.strictEqual(facebookFinalText(null), '');
 console.log('ALL PARSER TESTS PASSED');
 

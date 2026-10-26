@@ -141,20 +141,13 @@ app.post('/api/logout', async (req, res) => {
     }
 });
 
-app.post('/api/upload-pdf', upload.single('conversationFile'), (req, res) => {
+app.post('/api/upload-json', (req, res) => upload.single('conversationFile')(req, res, (err) => {
+    if (err) return res.status(400).json({ success: false, message: err.message });
     if (req.file) session.uploadedFiles.push(req.file.path);
     res.json({ message: 'File uploaded and parsing started' });
-});
+}));
 
 // ---------- [DASH-2] Content extraction & mapping ----------
-async function pdfToText(buffer) {
-    const mod = require('pdf-parse');
-    if (mod.PDFParse) { // pdf-parse v2
-        const parser = new mod.PDFParse({ data: buffer });
-        try { return (await parser.getText()).text; } finally { await parser.destroy?.(); }
-    }
-    return (await (mod.default || mod)(buffer)).text; // pdf-parse v1
-}
 async function listDriveVideos(folderId) {
     assertGoogleConfigured();
     const files = [];
@@ -180,22 +173,27 @@ const videoNumber = (name) => {
     return m ? parseInt(m[1], 10) : null;
 };
 
-app.post('/api/process', upload.single('conversationFile'), async (req, res) => {
+app.post('/api/process', (req, res, next) => upload.single('conversationFile')(req, res, (err) => (
+    err ? res.status(400).json({ success: false, message: err.message }) : next()
+)), async (req, res) => {
     const file = req.file;
     try {
         if (!session.googleDrive.connected) throw new Error('Connect Google Drive first.');
-        if (!file) throw new Error('Please upload the Conversation PDF.');
+        if (!file) throw new Error('Please upload the Gemini chat export (.json).');
         session.uploadedFiles.push(file.path);
-        if (file.mimetype !== 'application/pdf' && !/\.pdf$/i.test(file.originalname)) {
-            throw new Error('Uploaded file must be a PDF.');
-        }
 
-        const [videos, text] = await Promise.all([
-            listDriveVideos(session.googleDrive.folderId),
-            fs.promises.readFile(file.path).then(pdfToText),
-        ]);
-        const responses = extractResponses(text);
-        if (!responses.length) throw new Error('No valid JSON AI responses ({ "instagram": {...}, "facebook": {...} }) found in the PDF.');
+        const fileContent = await fs.promises.readFile(file.path, 'utf8');
+        let data;
+        try {
+            data = JSON.parse(fileContent.replace(/^\uFEFF/, ''));
+        } catch {
+            throw new Error('Uploaded file is not valid JSON.');
+        }
+        if (!Array.isArray(data?.chat)) throw new Error('JSON export has no "chat" array.');
+
+        const videos = await listDriveVideos(session.googleDrive.folderId);
+        const responses = extractResponses(data);
+        if (!responses.length) throw new Error('No Instagram/Facebook content found in the chat export.');
 
         const byNumber = new Map(responses.map((r) => [r.index, r]));
         const items = videos

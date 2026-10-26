@@ -169,8 +169,8 @@ function App() {
         <main className="dashboard">
           <h2>Main Dashboard</h2>
           <div className="upload-row">
-            <label>Conversation PDF
-              <input key={fileKey} type="file" accept="application/pdf,.pdf"
+            <label>Gemini Chat Export (.json)
+              <input key={fileKey} type="file" accept="application/json,.json"
                 onChange={(e) => setPdf(e.target.files[0] || null)} />
             </label>
             <button onClick={getVideosAndCaptions} disabled={!pdf || processing || scheduling}>
