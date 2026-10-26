@@ -102,14 +102,21 @@ const aiHtmlOf = (item) => {
 };
 
 // data: parsed Gemini export ({ chat: [...] }) or the chat array itself.
+// data: parsed Gemini export ({ chat: [...] }) or the chat array itself.
 function extractResponses(data) {
     const chat = Array.isArray(data) ? data : data?.chat;
     if (!Array.isArray(chat)) return [];
+
     const results = [];
-    chat.slice(1).forEach((item, i) => { // skip chat[0] (initial prompt)
+
+    // Process every item starting from 0. Do not use slice(1).
+    chat.forEach((item, i) => {
         const parsed = parseAiHtml(aiHtmlOf(item));
-        if (parsed) results.push({ index: i + 1, ...parsed }); // chat[i+1] -> R-NEW-(i+1).mp4
+
+        // i = 0 becomes index 1 (R-NEW-1.mp4)
+        if (parsed) results.push({ index: i + 1, ...parsed });
     });
+
     return results;
 }
 
