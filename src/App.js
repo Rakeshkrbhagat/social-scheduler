@@ -1,6 +1,4 @@
 import { useState } from 'react';
-
-
 import './App.css';
 
 const API = process.env.REACT_APP_API_URL || 'http://localhost:5000';
@@ -31,9 +29,9 @@ function Dialog({ title, children, actions }) {
   );
 }
 
-const initialStatus = { google: false, facebook: false, instagram: false };
+const initialStatus = { google: false, facebook: false };
 
-// Dialog steps: drive | driveSuccess | driveFail | facebook | facebookFail | instagram | instagramFail | done | null
+// Dialog steps: drive | driveSuccess | driveFail | facebook | facebookFail | done | null
 function App() {
   const [step, setStep] = useState(null);
   const [status, setStatus] = useState(initialStatus);
@@ -41,7 +39,6 @@ function App() {
   const [message, setMessage] = useState('');
   const [folderUrl, setFolderUrl] = useState('');
   const [fb, setFb] = useState({ pageId: '', accessToken: '' });
-  const [ig, setIg] = useState({ accountId: '', accessToken: '' });
 
   const run = async (path, body, onOk, failStep) => {
     setLoading(true);
@@ -60,22 +57,16 @@ function App() {
   const connectFacebook = () =>
     run('/api/auth/facebook', fb, () => {
       setStatus((s) => ({ ...s, facebook: true }));
-      setStep('instagram');
+      setStep('done');
     }, 'facebookFail');
 
-  const connectInstagram = () =>
-    run('/api/auth/instagram', ig, () => {
-      setStatus((s) => ({ ...s, instagram: true }));
-      setStep('done');
-    }, 'instagramFail');
-
   // [DASH-1] / [DASH-2]
-  const [pdf, setPdf] = useState(null);
+  const [chatFile, setChatFile] = useState(null);
   const [fileKey, setFileKey] = useState(0);
   const [processing, setProcessing] = useState(false);
   const [procError, setProcError] = useState('');
   const [items, setItems] = useState([]);
-  const authenticated = status.google && status.facebook && status.instagram;
+  const authenticated = status.google && status.facebook;
 
   const getVideosAndCaptions = async () => {
     setProcessing(true);
@@ -83,15 +74,14 @@ function App() {
     setItems([]);
     try {
       const fd = new FormData();
-      fd.append('conversationFile', pdf);
+      fd.append('conversationFile', chatFile);
       const res = await fetch(`${API}/api/process`, { method: 'POST', body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.success === false) throw new Error(data.message || res.statusText);
-      // hashtags are editable space-separated strings (from the AI JSON)
+      // hashtags are editable space-separated strings
       const tagStr = (t) => (Array.isArray(t) ? t.join(' ') : String(t ?? ''));
       setItems((data.items || []).map((it) => ({
         ...it,
-        instagram: it.instagram && { ...it.instagram, hashtags: tagStr(it.instagram.hashtags) },
         facebook: it.facebook && { ...it.facebook, hashtags: tagStr(it.facebook.hashtags) },
       })));
       setResults({});
@@ -109,8 +99,8 @@ function App() {
   const [results, setResults] = useState({});
   const [schedMsg, setSchedMsg] = useState(null);
 
-  const updateItem = (i, platform, field, value) =>
-    setItems((list) => list.map((it, idx) => (idx === i ? { ...it, [platform]: { ...it[platform], [field]: value } } : it)));
+  const updateItem = (i, field, value) =>
+    setItems((list) => list.map((it, idx) => (idx === i ? { ...it, facebook: { ...it.facebook, [field]: value } } : it)));
 
   const schedule = async () => {
     setScheduling(true);
@@ -138,7 +128,7 @@ function App() {
 
   const logout = async () => {
     await post('/api/logout');
-    setPdf(null);
+    setChatFile(null);
     setFileKey((k) => k + 1);
     setItems([]);
     setProcError('');
@@ -149,7 +139,6 @@ function App() {
     setStatus(initialStatus);
     setFolderUrl('');
     setFb({ pageId: '', accessToken: '' });
-    setIg({ accountId: '', accessToken: '' });
     setMessage('');
     setStep(null);
     try { localStorage.clear(); sessionStorage.clear(); } catch (_) {}
@@ -171,9 +160,9 @@ function App() {
           <div className="upload-row">
             <label>Gemini Chat Export (.json)
               <input key={fileKey} type="file" accept="application/json,.json"
-                onChange={(e) => setPdf(e.target.files[0] || null)} />
+                onChange={(e) => setChatFile(e.target.files[0] || null)} />
             </label>
-            <button onClick={getVideosAndCaptions} disabled={!pdf || processing || scheduling}>
+            <button onClick={getVideosAndCaptions} disabled={!chatFile || processing || scheduling}>
               {processing ? 'Processing…' : 'Get Video & Captions'}
             </button>
           </div>
@@ -183,7 +172,7 @@ function App() {
             <>
               <h3>Review Content</h3>
               <table className="results">
-                <thead><tr><th>#</th><th>Video</th><th>Instagram Reel (caption / hashtags)</th><th>Facebook Reel (description / hashtags)</th><th>Status</th></tr></thead>
+                <thead><tr><th>#</th><th>Video</th><th>Facebook Reel (description / hashtags)</th><th>Status</th></tr></thead>
                 <tbody>
                   {items.map((it, i) => {
                     const r = results[it.video.id];
@@ -191,22 +180,14 @@ function App() {
                       <tr key={it.video.id}>
                         <td>{it.number ?? '–'}</td>
                         <td>{it.video.link ? <a href={it.video.link} target="_blank" rel="noreferrer">{it.video.name}</a> : it.video.name}</td>
-                        <td>{it.instagram ? <>
-                          <textarea rows={4} value={it.instagram.caption} disabled={scheduling}
-                            onChange={(e) => updateItem(i, 'instagram', 'caption', e.target.value)} />
-                          <input value={it.instagram.hashtags} disabled={scheduling}
-                            onChange={(e) => updateItem(i, 'instagram', 'hashtags', e.target.value)} />
-                        </> : <em>No matching response</em>}</td>
                         <td>{it.facebook ? <>
                           <textarea rows={4} value={it.facebook.description} disabled={scheduling}
-                            onChange={(e) => updateItem(i, 'facebook', 'description', e.target.value)} />
+                            onChange={(e) => updateItem(i, 'description', e.target.value)} />
                           <input value={it.facebook.hashtags} disabled={scheduling}
-                            onChange={(e) => updateItem(i, 'facebook', 'hashtags', e.target.value)} />
+                            onChange={(e) => updateItem(i, 'hashtags', e.target.value)} />
                         </> : <em>No matching response</em>}</td>
-                        <td>{r ? (r.error ? <span className="error">{r.error}</span> : <>
-                          <div>FB: {r.facebook?.success ? '✅' : `❌ ${r.facebook?.message || ''}`}</div>
-                          <div>IG: {r.instagram?.success ? '✅' : `❌ ${r.instagram?.message || ''}`}</div>
-                        </>) : '—'}</td>
+                        <td>{r ? (r.error ? <span className="error">{r.error}</span>
+                          : (r.facebook?.success ? '✅ Scheduled' : `❌ ${r.facebook?.message || ''}`)) : '—'}</td>
                       </tr>
                     );
                   })}
@@ -232,7 +213,6 @@ function App() {
           <ul className="status-list">
             <li>Google Drive: {status.google ? '✅ Connected' : '❌ Not connected'}</li>
             <li>Facebook: {status.facebook ? '✅ Connected' : '❌ Not connected'}</li>
-            <li>Instagram: {status.instagram ? '✅ Connected' : '❌ Not connected'}</li>
           </ul>
           <button onClick={() => setStep('drive')}>Connect Accounts</button>
         </main>
@@ -296,33 +276,9 @@ function App() {
         </Dialog>
       )}
 
-      {step === 'instagram' && (
-        <Dialog title="Connect Instagram" actions={<>
-          <button onClick={close}>Cancel</button>
-          <button onClick={connectInstagram} disabled={loading || !ig.accountId}>{busy || 'Connect'}</button>
-        </>}>
-          <p>Facebook connected successfully. Now provide your Instagram credentials.</p>
-          <label>Instagram Business Account ID
-            <input value={ig.accountId} onChange={(e) => setIg({ ...ig, accountId: e.target.value })} />
-          </label>
-          <label>Access Token (optional – defaults to Facebook token)
-            <input type="password" value={ig.accessToken} onChange={(e) => setIg({ ...ig, accessToken: e.target.value })} />
-          </label>
-        </Dialog>
-      )}
-
-      {step === 'instagramFail' && (
-        <Dialog title="Instagram Connection Failed" actions={<>
-          <button onClick={close}>Close</button>
-          <button onClick={() => setStep('instagram')}>Retry</button>
-        </>}>
-          <p>{message}</p>
-        </Dialog>
-      )}
-
       {step === 'done' && (
         <Dialog title="All Set!" actions={<button onClick={close}>Go to Dashboard</button>}>
-          <p>Google Drive, Facebook and Instagram are connected.</p>
+          <p>Google Drive and Facebook are connected.</p>
         </Dialog>
       )}
     </div>
@@ -330,3 +286,4 @@ function App() {
 }
 
 export default App;
+

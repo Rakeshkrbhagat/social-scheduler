@@ -25,9 +25,10 @@ function htmlToLines(html) {
         .filter(Boolean);
 }
 
-// Normalized heading key, e.g. "2. INSTAGRAM REELS" -> "instagram reels", "Caption:" -> "caption"
+// Normalized heading key, e.g. "3. FACEBOOK REELS" -> "facebook reels", "Description:" -> "description"
 const key = (l) => l.toLowerCase().replace(/^[\d.)\s#*-]+/, '').replace(/[:*\s]+$/, '').trim();
-const isPlatformHeading = (l) => /^(?:[\d.)\s#*-]*)(instagram|facebook|youtube|tiktok|x|twitter|linkedin)\b/i.test(l) && l.length < 60;
+// Other platforms' headings are detected only so their sections are skipped (Facebook-only output).
+const isPlatformHeading = (l) => /^(?:[\d.)\s#*-]*)(insta\w*|ig|facebook|fb|youtube|tiktok|x|twitter|linkedin)\b/i.test(l) && l.length < 60;
 const FIELD_KEYS = new Set(['caption', 'description', 'hashtags', 'hashtag', 'on-screen text', 'on screen text',
     'title', 'thumbnail', 'thumbnail text', 'hook', 'cta', 'call to action', 'audio', 'music', 'script', 'notes']);
 const isHeading = (l) => /^\d+\.\s/.test(l) || isPlatformHeading(l) || FIELD_KEYS.has(key(l));
@@ -66,18 +67,15 @@ function hashtags(section) {
     return Array.from(new Set(tags)).join(' ');
 }
 
-// Strict JSON answer inside the ai block: { instagram: {...}, facebook: {...} }
+// Strict JSON answer inside the ai block: { facebook: { description, hashtags } }
 function tryJson(lines) {
     const text = lines.join(' ');
     const s = text.indexOf('{'), e = text.lastIndexOf('}');
     if (s < 0 || e <= s) return null;
     try {
         const d = JSON.parse(text.slice(s, e + 1));
-        if (!d?.instagram || !d?.facebook) return null;
-        return {
-            instagram: { caption: str(d.instagram.caption), hashtags: str(d.instagram.hashtags) },
-            facebook: { description: str(d.facebook.description), hashtags: str(d.facebook.hashtags) },
-        };
+        if (!d?.facebook) return null;
+        return { facebook: { description: str(d.facebook.description), hashtags: str(d.facebook.hashtags) } };
     } catch { return null; }
 }
 
@@ -85,13 +83,9 @@ function parseAiHtml(html) {
     const lines = htmlToLines(html);
     const json = tryJson(lines);
     if (json) return json;
-    const ig = platformSection(lines, /instagram/i);
-    const fb = platformSection(lines, /facebook/i);
-    if (!ig.length && !fb.length) return null;
-    return {
-        instagram: { caption: field(ig, 'caption'), hashtags: hashtags(ig) },
-        facebook: { description: field(fb, 'description'), hashtags: hashtags(fb) },
-    };
+    const fb = platformSection(lines, /^(?:[\d.)\s#*-]*)(facebook|fb)\b/i);
+    if (!fb.length) return null;
+    return { facebook: { description: field(fb, 'description'), hashtags: hashtags(fb) } };
 }
 
 const aiHtmlOf = (item) => {
@@ -120,7 +114,6 @@ function extractResponses(data) {
     return results;
 }
 
-const instagramFinalText = (obj) => (obj ? `${str(obj.caption)}\n\n${str(obj.hashtags)}`.trim() : '');
 const facebookFinalText = (obj) => (obj ? `${str(obj.description)}\n\n${str(obj.hashtags)}`.trim() : '');
 
-module.exports = { extractResponses, instagramFinalText, facebookFinalText };
+module.exports = { extractResponses, facebookFinalText };

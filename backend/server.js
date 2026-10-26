@@ -1,7 +1,5 @@
-const { extractResponses, instagramFinalText, facebookFinalText } = require('./parser');
+const { extractResponses, facebookFinalText } = require('./parser');
 const express = require('express');
-
-
 const cors = require('cors');
 const multer = require('multer');
 const fs = require('fs');
@@ -16,13 +14,20 @@ app.use(express.json());
 
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-const upload = multer({ dest: UPLOAD_DIR });
+const upload = multer({
+    dest: UPLOAD_DIR,
+    limits: { fileSize: 20 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        const isJson = path.extname(file.originalname).toLowerCase() === '.json'
+            || /json/i.test(file.mimetype || '');
+        cb(isJson ? null : new Error('Only Gemini chat export .json files are accepted.'), isJson);
+    },
+});
 
-// In-memory session state (single-user app)
+// In-memory session state (single-user app). Publishing is Facebook-only.
 const initialSession = () => ({
     googleDrive: { connected: false, folderId: null, folderUrl: null },
     facebook: { connected: false, pageId: null, accessToken: null },
-    instagram: { connected: false, accountId: null, accessToken: null },
     config: {},
     uploadedFiles: [],
 });
@@ -30,21 +35,10 @@ let session = initialSession();
 
 const GRAPH = 'https://graph.facebook.com/v19.0';
 
-// ---------- Google OAuth2 (GOOGLE_API_KEY cannot read private Drive folders) ----------
-const oauth2Client = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET
-);
-
-oauth2Client.setCredentials({
-    refresh_token: process.env.GOOGLE_REFRESH_TOKEN
-});
-
-// Pass the oauth2Client instead of the API key
-const drive = google.drive({
-    version: 'v3',
-    auth: oauth2Client
-});
+// ---------- Google OAuth2 ----------
+const oauth2Client = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
+oauth2Client.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN });
+const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
 const assertGoogleConfigured = () => {
     const missing = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REFRESH_TOKEN'].filter((k) => !process.env[k]);
@@ -61,18 +55,13 @@ function extractFolderId(url) {
 
 // [AUTH-1] Google Drive connection
 app.post('/api/auth/google', async (req, res) => {
-    const { folderUrl } = req.body || {};
-    const folderId = extractFolderId(folderUrl);
-    if (!folderId) {
-        return res.status(400).json({ success: false, message: 'Invalid Google Drive folder URL.' });
-    }
+    const folderId = extractFolderId(req.body?.folderUrl);
+    if (!folderId) return res.status(400).json({ success: false, message: 'Invalid Google Drive folder URL.' });
     try {
         assertGoogleConfigured();
         const { data } = await drive.files.get({ fileId: folderId, fields: 'id,name,mimeType', supportsAllDrives: true });
-        if (data.mimeType !== 'application/vnd.google-apps.folder') {
-            throw new Error('The URL does not point to a folder.');
-        }
-        session.googleDrive = { connected: true, folderId, folderUrl };
+        if (data.mimeType !== 'application/vnd.google-apps.folder') throw new Error('The URL does not point to a folder.');
+        session.googleDrive = { connected: true, folderId, folderUrl: req.body.folderUrl };
         res.json({ success: true, message: 'Google Drive connected', folderId });
     } catch (err) {
         res.status(400).json({ success: false, message: `Could not access folder: ${googleErr(err)}` });
@@ -81,13 +70,9 @@ app.post('/api/auth/google', async (req, res) => {
 
 // [AUTH-2] Facebook
 app.post('/api/auth/facebook', async (req, res) => {
-    if (!session.googleDrive.connected) {
-        return res.status(400).json({ success: false, message: 'Connect Google Drive first.' });
-    }
+    if (!session.googleDrive.connected) return res.status(400).json({ success: false, message: 'Connect Google Drive first.' });
     const { pageId, accessToken } = req.body || {};
-    if (!pageId || !accessToken) {
-        return res.status(400).json({ success: false, message: 'Page ID and access token are required.' });
-    }
+    if (!pageId || !accessToken) return res.status(400).json({ success: false, message: 'Page ID and access token are required.' });
     try {
         await axios.get(`${GRAPH}/${encodeURIComponent(pageId)}`, { params: { fields: 'id,name', access_token: accessToken } });
         session.facebook = { connected: true, pageId, accessToken };
@@ -98,31 +83,10 @@ app.post('/api/auth/facebook', async (req, res) => {
     }
 });
 
-// [AUTH-2] Instagram
-app.post('/api/auth/instagram', async (req, res) => {
-    if (!session.facebook.connected) {
-        return res.status(400).json({ success: false, message: 'Connect Facebook first.' });
-    }
-    const accountId = req.body?.accountId || process.env.INSTAGRAM_ACCOUNT_ID;
-    const token = req.body?.accessToken || process.env.PAGE_ACCESS_TOKEN || session.facebook.accessToken;
-    if (!accountId) {
-        return res.status(400).json({ success: false, message: 'Instagram Business Account ID is required.' });
-    }
-    try {
-        await axios.get(`${GRAPH}/${encodeURIComponent(accountId)}`, { params: { fields: 'id,username', access_token: token } });
-        session.instagram = { connected: true, accountId, accessToken: token };
-        res.json({ success: true, message: 'Instagram connected' });
-    } catch (err) {
-        const msg = err.response?.data?.error?.message || err.message;
-        res.status(401).json({ success: false, message: `Instagram authentication failed: ${msg}` });
-    }
-});
-
 app.get('/api/session', (req, res) => {
     res.json({
         googleDrive: { connected: session.googleDrive.connected, folderUrl: session.googleDrive.folderUrl },
         facebook: { connected: session.facebook.connected },
-        instagram: { connected: session.instagram.connected },
         uploadedFiles: session.uploadedFiles.length,
     });
 });
@@ -132,8 +96,6 @@ app.post('/api/logout', async (req, res) => {
     try {
         const entries = await fs.promises.readdir(UPLOAD_DIR);
         await Promise.all(entries.map((f) => fs.promises.rm(path.join(UPLOAD_DIR, f), { recursive: true, force: true })));
-        igTimers.forEach(clearTimeout);
-        igTimers.clear();
         session = initialSession();
         res.json({ success: true, message: 'Logged out and all data cleared.' });
     } catch (err) {
@@ -167,7 +129,7 @@ async function listDriveVideos(folderId) {
     return files;
 }
 
-// Number at the end of the file name (without extension): "R-YT-12.mp4" -> 12
+// Number at the end of the file name: "R-NEW-12.mp4" -> 12
 const videoNumber = (name) => {
     const m = path.parse(name).name.match(/(\d+)\s*$/);
     return m ? parseInt(m[1], 10) : null;
@@ -193,7 +155,7 @@ app.post('/api/process', (req, res, next) => upload.single('conversationFile')(r
 
         const videos = await listDriveVideos(session.googleDrive.folderId);
         const responses = extractResponses(data);
-        if (!responses.length) throw new Error('No Instagram/Facebook content found in the chat export.');
+        if (!responses.length) throw new Error('No Facebook content found in the chat export.');
 
         const byNumber = new Map(responses.map((r) => [r.index, r]));
         const items = videos
@@ -202,7 +164,6 @@ app.post('/api/process', (req, res, next) => upload.single('conversationFile')(r
             .map(({ video, number }) => ({
                 number,
                 video: { id: video.id, name: video.name, link: video.webViewLink },
-                instagram: byNumber.get(number)?.instagram || null,
                 facebook: byNumber.get(number)?.facebook || null,
             }));
 
@@ -213,16 +174,14 @@ app.post('/api/process', (req, res, next) => upload.single('conversationFile')(r
     }
 });
 
-// ---------- [SCHED-3] Sequential publishing ----------
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// ---------- [SCHED-3] Sequential Facebook publishing ----------
 const graphErr = (err) => err.response?.data?.error?.message || err.message;
 
-// Stream video directly from Google Drive to bypass virus-scan warning pages
+// Stream video from Google Drive (bypasses virus-scan warning pages)
 app.get('/api/video/:id', async (req, res) => {
     try {
-        const fileId = req.params.id;
         const response = await drive.files.get(
-            { fileId, alt: 'media', supportsAllDrives: true },
+            { fileId: req.params.id, alt: 'media', supportsAllDrives: true },
             { responseType: 'stream' }
         );
         res.setHeader('Content-Type', 'video/mp4');
@@ -233,16 +192,14 @@ app.get('/api/video/:id', async (req, res) => {
     }
 });
 
-// Direct-download URL pointing to your own server's proxy route
-async function driveDownloadUrl(req, fileId) {
+// Public URL of this server's proxy route (must be reachable by Meta's servers)
+function driveDownloadUrl(req, fileId) {
     const host = req.get('host');
     const protocol = host.includes('localhost') ? 'http' : 'https';
     return `${protocol}://${host}/api/video/${fileId}`;
 }
 
-const igTimers = new Set(); // pending Instagram publish timers (cleared on logout)
-
-// Facebook Reels: start -> hosted upload -> finish (natively scheduled)
+// Facebook Reels: start -> hosted upload -> finish (scheduled via scheduled_publish_time)
 async function uploadFacebookReel({ videoUrl, description, publishTime }) {
     const { pageId, accessToken } = session.facebook;
     const { data: start } = await axios.post(`${GRAPH}/${pageId}/video_reels`, null, {
@@ -265,43 +222,13 @@ async function uploadFacebookReel({ videoUrl, description, publishTime }) {
     return start.video_id;
 }
 
-// Instagram Reels: create container, wait until processed, publish at the scheduled time.
-// (The IG Graph API has no native scheduling, so the publish step is deferred server-side.)
-async function uploadInstagramReel({ videoUrl, caption, publishTime }) {
-    const { accountId, accessToken } = session.instagram;
-    const { data } = await axios.post(`${GRAPH}/${accountId}/media`, null, {
-        params: { media_type: 'REELS', video_url: videoUrl, caption, share_to_feed: true, access_token: accessToken },
-    });
-    const creationId = data.id;
-    for (let i = 0; i < 60; i++) { // up to ~5 minutes
-        const { data: s } = await axios.get(`${GRAPH}/${creationId}`, {
-            params: { fields: 'status_code,status', access_token: accessToken },
-        });
-        if (s.status_code === 'FINISHED') break;
-        if (s.status_code === 'ERROR' || s.status_code === 'EXPIRED') throw new Error(`Instagram processing failed: ${s.status || s.status_code}`);
-        if (i === 59) throw new Error('Instagram processing timed out.');
-        await sleep(5000);
-    }
-    const publish = () => axios.post(`${GRAPH}/${accountId}/media_publish`, null, {
-        params: { creation_id: creationId, access_token: accessToken },
-    }).catch((e) => console.error(`Instagram publish failed (${creationId}): ${graphErr(e)}`));
-    const delay = (publishTime * 1000) - Date.now();
-    if (delay <= 0) await publish();
-    else {
-        const t = setTimeout(() => { igTimers.delete(t); publish(); }, delay);
-        igTimers.add(t);
-    }
-    return creationId;
-}
-
 app.post('/api/schedule', async (req, res) => {
     const { date, time, items } = req.body || {};
-    // Prefer the client-computed epoch (user's local timezone)
     const publishTime = Number.isInteger(req.body?.publishTime)
         ? req.body.publishTime
         : Math.floor(new Date(`${date}T${time}`).getTime() / 1000);
     try {
-        if (!session.facebook.connected || !session.instagram.connected) throw new Error('Connect Facebook and Instagram first.');
+        if (!session.facebook.connected) throw new Error('Connect Facebook first.');
         assertGoogleConfigured();
         if (!date || !time) throw new Error('Date and time are required.');
         if (!Array.isArray(items) || !items.length) throw new Error('No videos to schedule.');
@@ -315,40 +242,31 @@ app.post('/api/schedule', async (req, res) => {
     }
 
     const results = [];
-    for (const item of items) { // strictly one video at a time: Facebook, then Instagram
-        const r = { videoId: item.video.id, name: item.video.name, facebook: null, instagram: null };
-        if (!item.facebook || !item.instagram) {
-            r.error = 'No matching PDF response for this video; skipped.';
-            results.push(r);
-            continue;
-        }
-        let videoUrl;
-        try {
-            // Update this line to include "req"
-            videoUrl = await driveDownloadUrl(req, item.video.id);
-        } catch (e) {
-            r.error = `Google auth failed: ${googleErr(e)}`;
+    for (const item of items) { // strictly one video at a time
+        const r = { videoId: item.video.id, name: item.video.name, facebook: null };
+        if (!item.facebook) {
+            r.error = 'No matching chat response for this video; skipped.';
             results.push(r);
             continue;
         }
         try {
-            const id = await uploadFacebookReel({ videoUrl, publishTime, description: facebookFinalText(item.facebook) });
+            const id = await uploadFacebookReel({
+                videoUrl: driveDownloadUrl(req, item.video.id),
+                publishTime,
+                description: facebookFinalText(item.facebook),
+            });
             r.facebook = { success: true, id };
         } catch (e) { r.facebook = { success: false, message: graphErr(e) }; }
-        try {
-            const id = await uploadInstagramReel({ videoUrl, publishTime, caption: instagramFinalText(item.instagram) });
-            r.instagram = { success: true, id };
-        } catch (e) { r.instagram = { success: false, message: graphErr(e) }; }
         results.push(r);
     }
 
-    const ok = results.filter((r) => r.facebook?.success && r.instagram?.success).length;
+    const ok = results.filter((r) => r.facebook?.success).length;
     session.config.lastSchedule = { date, time, results };
     res.json({
         success: ok === results.length,
         message: ok === results.length
-            ? `All ${ok} video(s) scheduled on Facebook and Instagram for ${date} ${time}.`
-            : `${ok} of ${results.length} video(s) fully scheduled. See details below.`,
+            ? `All ${ok} video(s) scheduled on Facebook for ${date} ${time}.`
+            : `${ok} of ${results.length} video(s) scheduled. See details below.`,
         results,
     });
 });
