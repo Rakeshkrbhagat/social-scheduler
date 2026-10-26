@@ -217,10 +217,27 @@ app.post('/api/process', (req, res, next) => upload.single('conversationFile')(r
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const graphErr = (err) => err.response?.data?.error?.message || err.message;
 
-// Direct-download URL for a Drive file, fetchable by Meta's servers (fresh OAuth access token).
-async function driveDownloadUrl(fileId) {
-    const { token } = await oauth2Client.getAccessToken(); // auto-refreshed via refresh token
-    return `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true&access_token=${encodeURIComponent(token)}`;
+// Stream video directly from Google Drive to bypass virus-scan warning pages
+app.get('/api/video/:id', async (req, res) => {
+    try {
+        const fileId = req.params.id;
+        const response = await drive.files.get(
+            { fileId, alt: 'media', supportsAllDrives: true },
+            { responseType: 'stream' }
+        );
+        res.setHeader('Content-Type', 'video/mp4');
+        response.data.pipe(res);
+    } catch (err) {
+        console.error('Streaming error:', err.message);
+        res.status(500).send('Error streaming video');
+    }
+});
+
+// Direct-download URL pointing to your own server's proxy route
+async function driveDownloadUrl(req, fileId) {
+    const host = req.get('host');
+    const protocol = host.includes('localhost') ? 'http' : 'https';
+    return `${protocol}://${host}/api/video/${fileId}`;
 }
 
 const igTimers = new Set(); // pending Instagram publish timers (cleared on logout)
@@ -307,7 +324,8 @@ app.post('/api/schedule', async (req, res) => {
         }
         let videoUrl;
         try {
-            videoUrl = await driveDownloadUrl(item.video.id);
+            // Update this line to include "req"
+            videoUrl = await driveDownloadUrl(req, item.video.id);
         } catch (e) {
             r.error = `Google auth failed: ${googleErr(e)}`;
             results.push(r);
